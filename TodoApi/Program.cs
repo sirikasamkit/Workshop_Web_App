@@ -4,6 +4,8 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Scalar.AspNetCore;
+using Microsoft.OpenApi;
 
 using TodoApi.Dtos;
 using TodoApi.Models;
@@ -13,6 +15,24 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        document.Components ??= new Microsoft.OpenApi.OpenApiComponents();
+        document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>();
+        document.Components.SecuritySchemes["Bearer"] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT",
+            Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\""
+        };
+
+        return Task.CompletedTask;
+    });
+});
+
 builder.Services.AddOpenApi();
 
 builder.Services.AddDbContext<AppdbContext>(options =>
@@ -20,10 +40,12 @@ builder.Services.AddDbContext<AppdbContext>(options =>
         builder.Configuration.GetConnectionString("DefaultConnection")
 ));
 
-var jwtKey = builder.Configuration["Jwt:Key"]!;
-
+var jwtKey = builder.Configuration["Jwt:Key"];
 builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
     .AddJwtBearer(options =>
     {
         options.TokenValidationParameters = new TokenValidationParameters
@@ -34,8 +56,7 @@ builder.Services
             ValidateIssuerSigningKey = true,
             ValidIssuer = builder.Configuration["Jwt:Issuer"],
             ValidAudience = builder.Configuration["Jwt:Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(jwtKey))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
         };
     });
 
@@ -47,6 +68,10 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.MapScalarApiReference(options =>
+    {
+        options.AddPreferredSecuritySchemes("Bearer");
+    });
 }
 
 app.UseHttpsRedirection();
@@ -59,14 +84,14 @@ var todoGroup = app.MapGroup("/api/todos").WithTags("Todos");
 
 // var todos = new List<TodoGetDto>
 // {
-//     new (1, "Learn C#", false),
-//     new (2, "Learn ASP.NET Core", false),
-//     new (3, "Build a web API", false)
+//     new(1, "Learn C#", true),
+//     new(2, "Learn ASP.NET Core", false),
+//     new(3, "Build a web API", false)
 // };
 
 // todoGroup.MapGet("/", () => Results.Ok(todos));
 
-// todoGroup.MapGet("/{id:int}", (int id) =>
+// todoGroup.MapGet("/{id}", (int id) =>
 // {
 //     var todo = todos.FirstOrDefault(t => t.Id == id);
 
@@ -80,7 +105,7 @@ var todoGroup = app.MapGroup("/api/todos").WithTags("Todos");
 //     var todo = new TodoGetDto(nextId, dto.Title, false);
 //     todos.Add(todo);
 
-//     return Results.Created($"/api/todos/{todo.Id}", todo);
+//     return Results.Created($"/{todo.Id}", todo);
 // });
 
 // todoGroup.MapPut("/{id}", (int id, TodoPutDto dto) =>
@@ -88,12 +113,12 @@ var todoGroup = app.MapGroup("/api/todos").WithTags("Todos");
 //     try
 //     {
 //         var index = todos.FindIndex(t => t.Id == id);
-//         //if(index == -1) return Results.NotFound();
+//         //if (index == -1) return Results.NotFound();
 
-//         todos[index] = todos[index] with 
-//         { 
-//             Title = dto.Title, 
-//             IsCompleted = dto.IsCompleted 
+//         todos[index] = todos[index] with
+//         {
+//             Title = dto.Title,
+//             IsCompleted = dto.IsCompleted
 //         };
 
 //         return Results.Ok(todos[index]);
@@ -118,7 +143,7 @@ var todoGroup = app.MapGroup("/api/todos").WithTags("Todos");
 //     {
 //         return Results.Problem("Parameter is null.{ex.Message}");
 //     }
-//     catch (Exception ex)
+//     catch(Exception ex)
 //     {
 //         return Results.Problem(ex.Message);
 //     }
@@ -130,15 +155,15 @@ var todoGroup = app.MapGroup("/api/todos").WithTags("Todos");
 
 todoGroup.MapGet("/", async (AppdbContext db) =>
 {
-   var todos = await db.Todos.ToListAsync();
+    var todos = await db.Todos.ToListAsync();
 
-   var todoGetDtos = todos.Select(t => 
-   new TodoGetDto(
-    t.Id, 
-    t.Title, 
-    t.IsCompleted));
+    var todoGetDtos = todos.Select(t =>
+                            new TodoGetDto(
+                                t.Id,
+                                t.Title,
+                                t.IsCompleted));
 
-   return todoGetDtos.Count() == 0 ? Results.NotFound() : Results.Ok(todoGetDtos);
+    return todoGetDtos.Count() == 0 ? Results.NotFound() : Results.Ok(todoGetDtos);
 })
 .RequireAuthorization();
 
@@ -150,7 +175,7 @@ todoGroup.MapPost("/", async (AppdbContext db, TodoPostDto dto) =>
     var todo = new Todoitem
     {
         Id = nextId,
-        Title= dto.Title,
+        Title = dto.Title,
         IsCompleted = false,
         CreatedAt = DateTime.UtcNow
     };
@@ -160,7 +185,7 @@ todoGroup.MapPost("/", async (AppdbContext db, TodoPostDto dto) =>
 
     var todoGetDto = new TodoGetDto(todo.Id, todo.Title, todo.IsCompleted);
 
-    return Results.Created($"/api/todos/{todo.Id}", todoGetDto);
+    return Results.Created($"/{todo.Id}", todoGetDto);
 })
 .RequireAuthorization();
 
@@ -176,23 +201,23 @@ app.MapPost("/api/login", (LoginDto dto, IConfiguration configuration) =>
     {
         new Claim(ClaimTypes.Name, dto.Username)
     };
-    
+
     var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"]));
 
     var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-    var toekn = new JwtSecurityToken(
+    var token = new JwtSecurityToken(
         issuer: configuration["Jwt:Issuer"],
-        audience: configuration["Jwt:Issuer"],
+        audience: configuration["Jwt:Audience"],
         claims: claims,
-        expires: DateTime.UtcNow.AddDays(int.Parse(configuration["Jwt:ExpirdayDays"])),
+        expires: DateTime.UtcNow.AddDays(int.Parse(configuration["Jwt:ExpireDays"])),
         signingCredentials: credentials
     );
 
-    var tokenString = new JwtSecurityTokenHandler().WriteToken(toekn);
+    var tokenString = new JwtSecurityTokenHandler().WriteToken(token);
 
     return Results.Ok(new { Token = tokenString });
-}).WithName("Authenticate").WithTags("Lognin")
+}).WithTags("Authentication").WithName("Login")
 .Produces<LoginResponseDto>(StatusCodes.Status200OK)
 .Produces(StatusCodes.Status401Unauthorized);
 

@@ -1,4 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
 
 using TodoApi.Dtos;
 using TodoApi.Models;
@@ -15,6 +20,27 @@ builder.Services.AddDbContext<AppdbContext>(options =>
         builder.Configuration.GetConnectionString("DefaultConnection")
 ));
 
+var jwtKey = builder.Configuration["Jwt:Key"]!;
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(jwtKey))
+        };
+    });
+
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -24,6 +50,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
 
 var todoGroup = app.MapGroup("/api/todos").WithTags("Todos");
 
@@ -133,6 +161,38 @@ todoGroup.MapPost("/", async (AppdbContext db, TodoPostDto dto) =>
 
     return Results.Created($"/api/todos/{todo.Id}", todoGetDto);
 });
+
+#endregion
+
+#region Authentication Endpoints
+
+app.MapPost("/api/login", (LoginDto dto, IConfiguration configuration) =>
+{
+    if (dto.Username != "admin" || dto.Password != "password") return Results.Unauthorized();
+
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.Name, dto.Username)
+    };
+    
+    var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:Key"]));
+
+    var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+    var toekn = new JwtSecurityToken(
+        issuer: configuration["Jwt:Issuer"],
+        audience: configuration["Jwt:Issuer"],
+        claims: claims,
+        expires: DateTime.UtcNow.AddDays(int.Parse(configuration["Jwt:ExpirdayDays"])),
+        signingCredentials: credentials
+    );
+
+    var tokenString = new JwtSecurityTokenHandler().WriteToken(toekn);
+
+    return Results.Ok(new { Token = tokenString });
+}).WithName("Authenticate").WithTags("Lognin")
+.Produces<LoginResponseDto>(StatusCodes.Status200OK)
+.Produces(StatusCodes.Status401Unauthorized);
 
 #endregion
 
